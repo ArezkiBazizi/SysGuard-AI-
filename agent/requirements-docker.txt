@@ -1,0 +1,8 @@
+# Deps image Docker (torch installe separement depuis l'index PyTorch CPU)
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+kubernetes==30.1.0
+python-dotenv==1.0.1
+httpx==0.27.0
+psutil>=5.9.0
+numpy>=1.26.0

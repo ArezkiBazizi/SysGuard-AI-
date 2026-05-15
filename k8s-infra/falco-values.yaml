@@ -1,0 +1,183 @@
+# Helm values Falco + Falco Sidekick (chart falcosecurity/falco >= 4.x)
+#
+# ARCHITECTURE BOSC (Bag of System Calls) :
+#   L'approche BoSC necessite un flux CONTINU de TOUS les syscalls depuis
+#   les conteneurs applicatifs — pas seulement des alertes sporadiques.
+#
+#   Pipeline : Falco (eBPF) -> Falco Sidekick -> webhook HTTP -> SysGuard-AI
+#
+#   Deux types de regles coexistent :
+#     1. sysguard-syscall-stream  : regle catch-all (DEBUG) qui capture CHAQUE
+#        syscall pour alimenter les histogrammes BoSC (414 dimensions).
+#     2. sysguard-security-rules  : regles de securite specifiques (WARNING/CRITICAL)
+#        qui ajoutent un contexte semantique aux alertes (shell, reverse shell,
+#        crypto-mining, lecture de fichiers sensibles).
+#
+# MODES DE FONCTIONNEMENT :
+#   - COLLECTE  : Sidekick -> collecteur (port 8001) pendant 12h+
+#                  pour constituer le dataset d'entrainement.
+#   - RUNTIME   : Sidekick -> agent (port 8000) pour la detection
+#                  temps reel avec reponse graduee.
+#   Voir la section falcosidekick.config.webhook.address ci-dessous.
+#
+# DEPLOIEMENT :
+#   helm repo add falcosecurity https://falcosecurity.github.io/charts
+#   helm repo update
+#   helm upgrade --install falco falcosecurity/falco \
+#     -f k8s-infra/falco-values.yaml -n falco --create-namespace
+
+# ── Driver eBPF ──────────────────────────────────────────────────────
+driver:
+  enabled: true
+  kind: modern_ebpf
+
+tty: true
+
+# ── Configuration Falco ──────────────────────────────────────────────
+falco:
+  grpc:
+    enabled: false
+  grpc_output:
+    enabled: false
+  json_output: true
+  json_include_output_property: true
+  syscall_event_drops:
+    actions:
+      - log
+      - alert
+  # Buffer elargi pour absorber les pics de syscalls sans perte
+  syscall_buf_size_preset: 4
+
+# ── Regles personnalisees ────────────────────────────────────────────
+customRules:
+
+  # ─── Regle catch-all : flux continu de syscalls pour BoSC ─────────
+  # C'est la regle CRITIQUE qui resout l'ecart architectural.
+  # Sans elle, l'histogramme de 414 dimensions resterait vide car Falco
+  # ne genere des evenements que lorsqu'une regle matche.
+  sysguard-syscall-stream.yaml: |
+    - macro: sysguard_app_container
+      condition: >
+        container.id != host and
+        not k8s.ns.name in (kube-system, kube-public, kube-node-lease, falco)
+
+    - rule: SysGuard syscall stream
+      desc: >
+        Capture tous les appels systeme des conteneurs applicatifs
+        pour alimenter les histogrammes BoSC de SysGuard-AI.
+        Priorite DEBUG pour ne pas interferer avec les alertes de securite.
+      condition: sysguard_app_container
+      output: >
+        syscall=%evt.type
+        cid=%container.id
+        pod=%k8s.pod.name
+        ns=%k8s.ns.name
+        proc=%proc.name
+        pid=%proc.pid
+      priority: DEBUG
+      tags: [sysguard, bosc, syscall_capture]
+      source: syscall
+
+  # ─── Regles de securite specifiques ───────────────────────────────
+  # Ces regles generent des alertes contextuelles a priorite plus elevee.
+  # Elles coexistent avec le catch-all ; le double-comptage est
+  # negligeable car elles ne matchent que sur des evenements rares
+  # (spawned_process, open_read) par rapport au volume total de syscalls.
+  #
+  # IMPORTANT : chaque output inclut %container.id et %evt.type pour
+  # que le collecteur/agent puisse identifier le conteneur et mettre
+  # a jour l'histogramme.
+  sysguard-security-rules.yaml: |
+    - rule: Terminal shell in container
+      desc: Detection du lancement d'un shell interactif dans un conteneur
+      condition: >
+        spawned_process and
+        container.id != host and
+        proc.name in (bash, sh, zsh, dash, ksh) and
+        not (proc.cmdline contains pg_isready or
+             proc.cmdline contains "/healthcheck" or
+             proc.cmdline contains "curl -f http" or
+             proc.cmdline contains "wget -q -O-")
+      output: >
+        shell=%proc.name user=%user.name
+        container_id=%container.id container_name=%container.name
+        evt_type=%evt.type pod=%k8s.pod.name ns=%k8s.ns.name
+        parent=%proc.pname cmdline=%proc.cmdline
+      priority: WARNING
+      tags: [container, shell, mitre_execution]
+
+    - rule: Reverse shell detected
+      desc: Activite de reverse shell dans un conteneur
+      condition: >
+        spawned_process and
+        container.id != host and
+        ((proc.name in (bash, sh, dash) and proc.cmdline contains "/dev/tcp") or
+         (proc.name in (nc, ncat, nmap) and proc.args contains "-e") or
+         (proc.name = python and proc.cmdline contains "socket") or
+         (proc.name = perl and proc.cmdline contains "socket"))
+      output: >
+        reverse_shell=%proc.name user=%user.name
+        container_id=%container.id container_name=%container.name
+        evt_type=%evt.type pod=%k8s.pod.name ns=%k8s.ns.name
+        cmdline=%proc.cmdline
+      priority: CRITICAL
+      tags: [container, shell, mitre_execution, reverse_shell]
+
+    - rule: Crypto mining process
+      desc: Processus de minage de cryptomonnaie dans un conteneur
+      condition: >
+        spawned_process and
+        container.id != host and
+        (proc.name in (xmrig, minerd, cpuminer, ethminer, cgminer, bfgminer) or
+         proc.cmdline contains "stratum+tcp" or
+         proc.cmdline contains "cryptonight" or
+         proc.cmdline contains "randomx")
+      output: >
+        miner=%proc.name user=%user.name
+        container_id=%container.id container_name=%container.name
+        evt_type=%evt.type pod=%k8s.pod.name ns=%k8s.ns.name
+        cmdline=%proc.cmdline
+      priority: CRITICAL
+      tags: [container, crypto, mitre_resource_hijacking]
+
+    - rule: Sensitive file access
+      desc: Lecture de fichiers sensibles dans un conteneur
+      condition: >
+        open_read and
+        container.id != host and
+        (fd.name startswith /etc/shadow or
+         fd.name startswith /etc/passwd or
+         fd.name startswith /etc/kubernetes or
+         fd.name startswith /var/run/secrets or
+         fd.name startswith /root/.ssh or
+         fd.name startswith /root/.kube)
+      output: >
+        file=%fd.name user=%user.name
+        container_id=%container.id container_name=%container.name
+        evt_type=%evt.type pod=%k8s.pod.name ns=%k8s.ns.name
+        proc=%proc.name
+      priority: WARNING
+      tags: [container, filesystem, mitre_credential_access]
+
+# ── Falco Sidekick ───────────────────────────────────────────────────
+falcosidekick:
+  enabled: true
+  config:
+    webhook:
+      # ┌─────────────────────────────────────────────────────────────┐
+      # │  MODE COLLECTE (entrainement)                               │
+      # │  Decommenter la ligne ci-dessous, commenter celle du mode   │
+      # │  runtime, puis re-deployer avec helm upgrade.               │
+      # │                                                             │
+      # │  address: "http://sysguard-collector.default.svc.cluster.local:8001/collect"
+      # └─────────────────────────────────────────────────────────────┘
+      #
+      # ┌─────────────────────────────────────────────────────────────┐
+      # │  MODE RUNTIME (detection)                                   │
+      # └─────────────────────────────────────────────────────────────┘
+      address: "http://sysguard-agent.default.svc.cluster.local:8000/falco-webhook"
+      # DEBUG = transmettre TOUS les evenements (y compris le catch-all)
+      # Ancienne valeur 'warning' filtrait tout sauf les alertes WARNING+
+      # ce qui rendait l'histogramme BoSC inutilisable.
+      minimumpriority: debug
+      checkcert: false

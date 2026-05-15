@@ -1,0 +1,47 @@
+# Application victime : DVWA (Damn Vulnerable Web Application)
+# Utilisée pour générer du trafic normal (collecte) et simuler des attaques
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dvwa
+  namespace: default
+  labels:
+    app: dvwa
+    role: victim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dvwa
+  template:
+    metadata:
+      labels:
+        app: dvwa
+        role: victim
+    spec:
+      containers:
+        - name: dvwa
+          image: vulnerables/web-dvwa:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dvwa
+  namespace: default
+spec:
+  selector:
+    app: dvwa
+  ports:
+    - port: 80
+      targetPort: 80
+  type: NodePort

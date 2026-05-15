@@ -1,0 +1,37 @@
+# RBAC pour l'agent SysGuard-AI
+# Permissions nécessaires :
+#   - list/get pods          (identifier le pod par container_id)
+#   - patch pods             (ajouter le label de quarantaine)
+#   - delete pods            (action manuelle opérateur uniquement)
+#   - create/delete networkpolicies (quarantaine réseau)
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sysguard-agent
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sysguard-agent-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "get", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "delete", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sysguard-agent-binding
+subjects:
+  - kind: ServiceAccount
+    name: sysguard-agent
+    namespace: default
+roleRef:
+  kind: ClusterRole
+  name: sysguard-agent-role
+  apiGroup: rbac.authorization.k8s.io

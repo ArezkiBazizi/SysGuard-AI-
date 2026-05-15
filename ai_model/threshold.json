@@ -1,0 +1,17 @@
+{
+  "alpha": 0.00010270356870023534,
+  "beta": 0.0001367138174828142,
+  "threshold": 0.00010270356870023534,
+  "percentile_alpha": 99.0,
+  "percentile_beta": 99.9,
+  "train_samples": 10000,
+  "data_source": "simulated",
+  "dropout_rate": 0.2,
+  "mse_stats": {
+    "mean": 2.39775181398727e-05,
+    "median": 1.61825300892815e-05,
+    "p95": 7.072877633618191e-05,
+    "max": 0.00021361983090173453
+  },
+  "active_dims_mean": 29
+}
