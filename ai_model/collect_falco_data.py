@@ -28,6 +28,7 @@ import signal
 import sys
 import time
 import threading
+from datetime import datetime, timezone
 from collections import defaultdict
 from typing import Dict, Optional
 
@@ -118,7 +119,29 @@ class FalcoCollector:
             "events_received": self._events_received,
             "vectors_written": self._vectors_written,
             "active_containers": len(self._buffers),
+            "output_path": self.output_path,
         }
+
+
+def _timestamped_output_path(output_path: str) -> str:
+    output_dir = os.path.dirname(output_path) or "."
+    base_name = os.path.basename(output_path)
+    stem, ext = os.path.splitext(base_name)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ext = ext or ".csv"
+
+    candidate = os.path.join(output_dir, f"{stem}_{timestamp}{ext}")
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(output_dir, f"{stem}_{timestamp}_{counter}{ext}")
+        counter += 1
+    return candidate
+
+
+def _resolve_output_path(output_path: str, timestamp_output: bool) -> str:
+    if timestamp_output or os.path.exists(output_path):
+        return _timestamped_output_path(output_path)
+    return output_path
 
 
 def main():
@@ -129,9 +152,18 @@ def main():
                         help="Durée de collecte en secondes (défaut: 43200 = 12h)")
     parser.add_argument("--output", type=str,
                         default=os.path.join(os.path.dirname(__file__), "dataset", "normal_traffic.csv"))
+    parser.add_argument(
+        "--timestamp-output",
+        action="store_true",
+        help="Ajoute un timestamp au nom du CSV pour éviter tout écrasement",
+    )
     args = parser.parse_args()
 
-    collector = FalcoCollector(args.output)
+    output_path = _resolve_output_path(args.output, args.timestamp_output)
+    if output_path != args.output:
+        print(f"[Collector] Nouveau fichier de sortie : {output_path}")
+
+    collector = FalcoCollector(output_path)
 
     from fastapi import FastAPI, Request
     import uvicorn
@@ -178,6 +210,7 @@ def main():
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigterm)
 
     status_interval = 60
 

@@ -1,4 +1,4 @@
-# Deployment du collecteur SysGuard-AI pour la phase d'entrainement.
+# Job du collecteur SysGuard-AI pour la phase d'entrainement.
 #
 # Le collecteur recoit les webhooks Falco (tous les syscalls via la regle
 # catch-all "SysGuard syscall stream"), les agrege en histogrammes BoSC
@@ -14,15 +14,15 @@
 # UTILISATION :
 #   kubectl apply -f k8s-infra/collector-deployment.yaml
 #   # Surveiller la progression :
-#   kubectl logs -f deployment/sysguard-collector
+#   kubectl logs -f job/sysguard-collector
 #   # Recuperer le CSV une fois la collecte terminee :
 #   kubectl cp default/$(kubectl get pod -l app=sysguard-collector -o name | head -1 | cut -d/ -f2):/data/normal_traffic.csv ai_model/dataset/normal_traffic.csv
 #   # Puis entrainer le modele :
 #   python ai_model/train_autoencoder.py --csv ai_model/dataset/normal_traffic.csv --epochs 50
 
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: sysguard-collector
   namespace: default
@@ -30,24 +30,24 @@ metadata:
     app: sysguard-collector
     component: training
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: sysguard-collector
+  backoffLimit: 0
   template:
     metadata:
       labels:
         app: sysguard-collector
         component: training
     spec:
+      restartPolicy: Never
       containers:
         - name: collector
-          image: sysguard-ai:latest
+          image: sysguard-ai:collectorfix
+          imagePullPolicy: IfNotPresent
           command: ["python", "ai_model/collect_falco_data.py"]
           args:
             - "--port=8001"
             - "--duration=43200"
             - "--output=/data/normal_traffic.csv"
+            - "--timestamp-output"
           ports:
             - containerPort: 8001
               name: http
@@ -57,22 +57,18 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              memory: 256Mi
-          livenessProbe:
-            httpGet:
-              path: /stats
-              port: 8001
-            initialDelaySeconds: 5
-            periodSeconds: 30
+              memory: 512Mi
           readinessProbe:
             httpGet:
               path: /stats
               port: 8001
-            initialDelaySeconds: 3
+            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
       volumes:
         - name: data
           persistentVolumeClaim:

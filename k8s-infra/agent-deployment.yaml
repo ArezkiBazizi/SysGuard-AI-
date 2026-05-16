@@ -22,6 +22,7 @@ spec:
       containers:
         - name: agent
           image: sysguard-ai:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           env:
