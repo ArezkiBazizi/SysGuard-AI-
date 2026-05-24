@@ -1,0 +1,17 @@
+{
+  "alpha": 0.0005234126001596451,
+  "beta": 0.002434999216347933,
+  "threshold": 0.0005234126001596451,
+  "percentile_alpha": 99.0,
+  "percentile_beta": 99.9,
+  "train_samples": 7096,
+  "data_source": "C:\\Users\\Arezki\\OneDrive\\Bureau\\m2 memoire\\SysGuard-AI\\SysGuard-AI-\\ai_model\\dataset\\normal_traffic_20260516T231519Z.csv",
+  "dropout_rate": 0.2,
+  "mse_stats": {
+    "mean": 3.5627828765427694e-05,
+    "median": 7.2229886427521706e-06,
+    "p95": 0.00010120528895640746,
+    "max": 0.0024837099481374025
+  },
+  "active_dims_mean": 8
+}

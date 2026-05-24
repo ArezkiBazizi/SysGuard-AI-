@@ -1,28 +1,44 @@
-# Deployment du collecteur SysGuard-AI pour la phase d'entrainement.
+# Collecteur SysGuard-AI — Job Kubernetes pour la phase d'entrainement.
 #
-# Le collecteur recoit les webhooks Falco (tous les syscalls via la regle
-# catch-all "SysGuard syscall stream"), les agrege en histogrammes BoSC
-# (414 dimensions, fenetres tumbling de 10s) et ecrit les vecteurs
-# normalises dans un CSV.
+# POURQUOI UN JOB ET PAS UN DEPLOYMENT ?
+#   Un Deployment redémarre le pod systematiquement (restartPolicy: Always).
+#   Cela ecrasait le CSV a chaque redemarrage meme si collect_falco_data.py
+#   est maintenant en mode reprise (append).
+#   Un Job avec restartPolicy: OnFailure :
+#     - redémarre uniquement en cas de crash (exit code != 0)
+#     - s'arrete proprement quand la duree est atteinte (exit 0)
+#     - conserve le CSV sur le PVC entre les redemarrages de crash
 #
 # PREREQUIS :
-#   1. Falco deploye avec falco-values.yaml en MODE COLLECTE
-#      (webhook address = sysguard-collector:8001/collect)
-#   2. L'application cible (DVWA) doit tourner et recevoir du trafic
-#      NORMAL (pas d'attaques pendant la collecte).
+#   1. Falco deploye en MODE COLLECTE (falco-values.yaml : address = sysguard-collector:8001/collect)
+#   2. DVWA doit recevoir du trafic HTTP continu (dvwa-load-generator.yaml)
+#   3. Image sysguard-ai:latest chargee dans Minikube
+#      minikube image load sysguard-ai:latest
 #
-# UTILISATION :
+# WORKFLOW COMPLET :
+#   # 1. Deployer le generateur de trafic DVWA
+#   kubectl apply -f k8s-infra/dvwa-load-generator.yaml
+#
+#   # 2. Deployer le collecteur
 #   kubectl apply -f k8s-infra/collector-deployment.yaml
-#   # Surveiller la progression :
-#   kubectl logs -f deployment/sysguard-collector
-#   # Recuperer le CSV une fois la collecte terminee :
-#   kubectl cp default/$(kubectl get pod -l app=sysguard-collector -o name | head -1 | cut -d/ -f2):/data/normal_traffic.csv ai_model/dataset/normal_traffic.csv
-#   # Puis entrainer le modele :
-#   python ai_model/train_autoencoder.py --csv ai_model/dataset/normal_traffic.csv --epochs 50
+#
+#   # 3. Surveiller (les logs montrent events/vecteurs chaque minute)
+#   kubectl logs -f job/sysguard-collector -n default
+#
+#   # 4. Recuperer le CSV a la fin (ou avant si interrompu)
+#   POD=$(kubectl get pod -n default -l job-name=sysguard-collector -o jsonpath="{.items[0].metadata.name}")
+#   kubectl cp default/$POD:/data/normal_traffic.csv ai_model/dataset/normal_traffic_falco.csv
+#
+#   # 5. Entrainer le modele sur les donnees reelles
+#   python ai_model/train_autoencoder.py --csv ai_model/dataset/normal_traffic_falco.csv --epochs 50
+#
+#   # 6. Supprimer les ressources de collecte (libere le PVC)
+#   kubectl delete -f k8s-infra/collector-deployment.yaml
+#   kubectl delete -f k8s-infra/dvwa-load-generator.yaml
 
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: sysguard-collector
   namespace: default
@@ -30,19 +46,22 @@ metadata:
     app: sysguard-collector
     component: training
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: sysguard-collector
+  # Ne pas recrer automatiquement le Job apres completion
+  ttlSecondsAfterFinished: 3600
+  # Nombre max de tentatives en cas de crash (exit != 0)
+  backoffLimit: 10
   template:
     metadata:
       labels:
         app: sysguard-collector
-        component: training
+        job-name: sysguard-collector
     spec:
+      # OnFailure = redemarrage uniquement si crash, pas si exit 0 (fin normale)
+      restartPolicy: OnFailure
       containers:
         - name: collector
           image: sysguard-ai:latest
+          imagePullPolicy: Never
           command: ["python", "ai_model/collect_falco_data.py"]
           args:
             - "--port=8001"
@@ -61,18 +80,24 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # Liveness : delai genereux (le serveur FastAPI prend ~10s a demarrer)
+          # failureThreshold eleve pour eviter les faux redemarrages
           livenessProbe:
             httpGet:
               path: /stats
               port: 8001
-            initialDelaySeconds: 5
+            initialDelaySeconds: 60
             periodSeconds: 30
+            failureThreshold: 5
+            timeoutSeconds: 10
           readinessProbe:
             httpGet:
               path: /stats
               port: 8001
-            initialDelaySeconds: 3
+            initialDelaySeconds: 15
             periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -92,6 +117,7 @@ spec:
       storage: 1Gi
 
 ---
+# Service expose le port HTTP pour que Falco Sidekick puisse poster
 apiVersion: v1
 kind: Service
 metadata:
@@ -101,7 +127,8 @@ metadata:
     app: sysguard-collector
 spec:
   selector:
-    app: sysguard-collector
+    # Le Job cree des pods avec le label job-name=sysguard-collector
+    job-name: sysguard-collector
   ports:
     - port: 8001
       targetPort: 8001

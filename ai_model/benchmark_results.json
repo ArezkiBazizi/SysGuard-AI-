@@ -1,0 +1,39 @@
+{
+  "model_path": "C:\\Users\\Arezki\\OneDrive\\Bureau\\m2 memoire\\SysGuard-AI\\SysGuard-AI-\\ai_model\\saved_model.pth",
+  "input_dim": 414,
+  "latency": {
+    "unit": "microseconds",
+    "n_samples": 2000,
+    "mean_us": 400.05,
+    "median_us": 312.35,
+    "p50_us": 312.35,
+    "p95_us": 845.49,
+    "p99_us": 1558.65,
+    "max_us": 4116.4,
+    "min_us": 140.1
+  },
+  "cpu_overhead": {
+    "method": "analytique + burst",
+    "burst_cpu_single_core_pct": 299.9,
+    "burst_cpu_node_pct": 37.487,
+    "overhead_per_window_pct": 0.0031,
+    "overhead_rate_limited_pct": 0.0312,
+    "n_cpu_logical": 8,
+    "burst_inferences_per_sec": 1915.0,
+    "note": "Burst = rafale continue (1915/s sur 1 coeur). Mode production (rate-limit 1 inf/s) : overhead=0.031%. Mode 1 inf/fenetre-10s : overhead=0.0031%."
+  },
+  "memory": {
+    "model_params_kb": 834.9,
+    "model_buffers_kb": 0.0,
+    "model_total_kb": 834.9,
+    "process_rss_mb": 328.5,
+    "n_parameters": 213724
+  },
+  "system": {
+    "cpu_count": 8,
+    "cpu_count_phys": 4,
+    "ram_total_gb": 7.8,
+    "python_version": "3.13.1",
+    "torch_version": "2.11.0+cpu"
+  }
+}

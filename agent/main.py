@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+import textwrap
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -68,30 +69,70 @@ def _load_autoencoder_model() -> SysGuardAutoencoder:
     return model
 
 
-def _load_thresholds() -> Dict[str, float]:
+def _load_thresholds() -> Dict[str, Any]:
     threshold_path = os.getenv("THRESHOLD_PATH", "ai_model/threshold.json")
     if os.path.exists(threshold_path):
         with open(threshold_path) as f:
             data = json.load(f)
         alpha = data.get("alpha", data.get("threshold", 0.05))
         beta = data.get("beta", alpha * 2.5)
+        rare_dims = data.get("rare_dims", {})
         logger.info("Seuils charges depuis %s : alpha=%.6f, beta=%.6f", threshold_path, alpha, beta)
-        return {"alpha": alpha, "beta": beta}
+        logger.info("Rare dims chargees : %d dimensions surveillees",
+                    len(rare_dims.get("rare_dim_indices", [])))
+        return {"alpha": alpha, "beta": beta, "rare_dims": rare_dims}
 
     alpha = float(os.getenv("THRESHOLD_ALPHA", "0.05"))
     beta = float(os.getenv("THRESHOLD_BETA", str(alpha * 2.5)))
     logger.info("Seuils depuis env : alpha=%.6f, beta=%.6f", alpha, beta)
-    return {"alpha": alpha, "beta": beta}
+    return {"alpha": alpha, "beta": beta, "rare_dims": {}}
+
+
+def _check_rare_syscalls(vector: np.ndarray, rare_dims: dict) -> bool:
+    """
+    Détection par syscalls rares (complément MSE).
+
+    Retourne True si au moins une dimension « rare » (absente du trafic
+    nominal à l'entraînement) dépasse le seuil d'occurrences fixé.
+    Cela permet d'escalader vers le Tier 2 des attaques furtives dont
+    la MSE globale reste sous α malgré la présence de syscalls suspects
+    (ex. ptrace, keyctl, setuid dans un contexte web).
+    """
+    indices: list = rare_dims.get("rare_dim_indices", [])
+    threshold: int = rare_dims.get("count_threshold", 5)
+    if not indices:
+        return False
+
+    rare_array = np.array(indices, dtype=int)
+    # Le vecteur est normalisé — on reconstitue les counts bruts approx.
+    # en multipliant par une constante représentative (1000 événements/fenêtre)
+    SCALE = 1000.0
+    raw_approx = vector[rare_array] * SCALE
+    triggered = raw_approx >= threshold
+    if triggered.any():
+        triggered_idx = rare_array[triggered].tolist()
+        logger.warning(
+            "RARE SYSCALLS detected : %d dimension(s) suspecte(s) [indices: %s]",
+            len(triggered_idx), triggered_idx[:10],
+        )
+        return True
+    return False
 
 
 MODEL = _load_autoencoder_model()
 THRESHOLDS = _load_thresholds()
 ALPHA = THRESHOLDS["alpha"]
 BETA = THRESHOLDS["beta"]
+RARE_DIMS = THRESHOLDS.get("rare_dims", {})
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+
+INCIDENT_REPORTS_DIR = os.getenv(
+    "INCIDENT_REPORTS_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "ai_model", "incident_reports"),
+)
 
 INCIDENT_LOG: List[Dict] = []
 
@@ -237,8 +278,9 @@ def _generate_incident_report(
             "alpha_threshold": ALPHA,
             "beta_threshold": BETA,
             "severity": severity,
-            "top_syscalls": top_syscalls[:5],
+            "top_syscalls": top_syscalls[:10],
             "falco_rule": event.get("rule", ""),
+            "falco_output": event.get("output", ""),
         },
         "analysis": {
             "tier": "Tier 2 — LLM (Décideur)",
@@ -255,6 +297,105 @@ def _generate_incident_report(
     return report
 
 
+def _format_report_txt(report: Dict) -> str:
+    """Formate le rapport prod en texte lisible (meme esprit que generate_incident_report.py)."""
+    sep = "=" * 68
+    thin = "-" * 68
+    det = report.get("detection", {})
+    ana = report.get("analysis", {})
+    rem = report.get("remediation", {})
+    llm = ana.get("verdict") if isinstance(ana.get("verdict"), dict) else {}
+
+    lines = [
+        sep,
+        f"  RAPPORT D'INCIDENT SYSGUARD-AI  —  {report.get('incident_id', 'N/A')}",
+        sep,
+        f"  Horodatage    : {report.get('timestamp', 'N/A')}",
+        f"  Pod           : {report.get('pod_name', 'unknown')} ({report.get('namespace', 'default')})",
+        f"  Container ID  : {report.get('container_id', 'N/A')}",
+        f"  Source        : agent production (webhook Falco)",
+        thin,
+        "",
+        "  TIER 1 — DETECTION",
+        f"  MSE           : {det.get('mse_score', 0):.6f}",
+        f"  Seuils        : alpha={det.get('alpha_threshold', 0):.6f}, beta={det.get('beta_threshold', 0):.6f}",
+        f"  Severite      : {det.get('severity', 'N/A')}",
+        f"  Regle Falco   : {det.get('falco_rule', '')}",
+        f"  Latence T1    : {report.get('tier1_latency_ms', 'N/A')} ms",
+        "",
+        "  Top syscalls (fenetre 10s) :",
+    ]
+    for sc in det.get("top_syscalls", [])[:10]:
+        lines.append(f"    - {sc.get('syscall', '?')} : {sc.get('count', 0)}")
+
+    falco_out = det.get("falco_output", "")
+    if falco_out:
+        lines += ["", "  Message Falco :"]
+        for line in textwrap.wrap(falco_out, width=64):
+            lines.append(f"    {line}")
+
+    lines += [
+        "",
+        thin,
+        "  TIER 2 — ANALYSE LLM",
+        f"  Modele        : {ana.get('llm_model', 'disabled')}",
+        f"  Latence T2    : {report.get('tier2_latency_ms', 'N/A')} ms",
+    ]
+    if llm:
+        lines += [
+            f"  Verdict       : {llm.get('verdict', 'N/A')}",
+            f"  Confiance     : {llm.get('confidence', 'N/A')}",
+            f"  Type attaque  : {llm.get('attack_type', 'N/A')}",
+            f"  Severite CVSS : {llm.get('severity_cvss', 'N/A')}",
+        ]
+        expl = llm.get("explanation", "")
+        if expl:
+            lines += ["", "  Explication :"]
+            for line in textwrap.wrap(expl, width=64):
+                lines.append(f"    {line}")
+    else:
+        lines.append("  Verdict       : LLM non disponible")
+
+    lines += [
+        "",
+        thin,
+        "  REMEDIATION",
+        f"  Action        : {report.get('final_action', rem.get('action_taken', 'none'))}",
+        f"  Details       : {rem.get('details', '')}",
+    ]
+
+    recs = report.get("recommendations") or (llm.get("recommendations") if llm else [])
+    if recs:
+        lines += ["", thin, "  ACTIONS RECOMMANDEES", thin]
+        for i, action in enumerate(recs, 1):
+            for j, line in enumerate(textwrap.wrap(str(action), width=60)):
+                prefix = f"  {i}. " if j == 0 else "     "
+                lines.append(f"{prefix}{line}")
+
+    lines += ["", sep]
+    return "\n".join(lines)
+
+
+def _persist_incident_report(report: Dict) -> Optional[str]:
+    """Ecrit incident_<id>.json et .txt dans INCIDENT_REPORTS_DIR."""
+    try:
+        os.makedirs(INCIDENT_REPORTS_DIR, exist_ok=True)
+        safe_id = report["incident_id"].lower().replace(" ", "-")
+        json_path = os.path.join(INCIDENT_REPORTS_DIR, f"incident_{safe_id}.json")
+        txt_path = os.path.join(INCIDENT_REPORTS_DIR, f"incident_{safe_id}.txt")
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(_format_report_txt(report))
+
+        logger.info("Rapport incident sauvegarde : %s", json_path)
+        return json_path
+    except OSError as e:
+        logger.error("Echec sauvegarde rapport incident : %s", e)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -269,6 +410,7 @@ async def healthz() -> Dict[str, Any]:
         "input_dim": INPUT_DIM,
         "llm_enabled": bool(LLM_API_KEY),
         "active_incidents": len(INCIDENT_LOG),
+        "incident_reports_dir": INCIDENT_REPORTS_DIR,
     }
 
 
@@ -351,19 +493,27 @@ async def receive_event(request: Request):
     mse = float(np.mean(np.square(vector - reconstruction)))
     tier1_latency_ms = (time.perf_counter() - t_start) * 1000
 
-    # --- Normal ---
+    # --- Normal (MSE) : vérifier quand même les syscalls rares (attaque furtive) ---
+    rare_alert = _check_rare_syscalls(vector, RARE_DIMS)
     if mse < ALPHA:
-        return {
-            "status": "ok",
-            "verdict": "normal",
-            "mse": round(mse, 8),
-            "thresholds": {"alpha": ALPHA, "beta": BETA},
-            "container_id": container_id,
-            "tier1_latency_ms": round(tier1_latency_ms, 2),
-        }
+        if not rare_alert:
+            return {
+                "status": "ok",
+                "verdict": "normal",
+                "mse": round(mse, 8),
+                "thresholds": {"alpha": ALPHA, "beta": BETA},
+                "container_id": container_id,
+                "tier1_latency_ms": round(tier1_latency_ms, 2),
+            }
+        # MSE faible MAIS syscalls rares détectés → escalade Tier 2 directe
+        logger.warning(
+            "ATTAQUE FURTIVE suspectee sur %s (MSE=%.6f < alpha=%.6f) "
+            "-- syscalls rares -> escalade Tier 2",
+            container_id, mse, ALPHA,
+        )
 
-    # --- Anomalie détectée ---
-    severity = "CRITIQUE" if mse >= BETA else "MODÉRÉE"
+    # --- Anomalie détectée (MSE ou syscalls rares) ---
+    severity = "CRITIQUE" if mse >= BETA else ("MODÉRÉE" if mse >= ALPHA else "FURTIVE")
     top_syscalls = get_top_syscalls(container_id, top_n=10)
 
     logger.warning(
@@ -394,6 +544,10 @@ async def receive_event(request: Request):
         container_id, mse, severity, top_syscalls,
         llm_verdict, quarantine_result, data,
     )
+    report["final_action"] = final_action
+    report["tier1_latency_ms"] = round(tier1_latency_ms, 2)
+    report["tier2_latency_ms"] = round(tier2_latency_ms, 2) if llm_verdict else None
+    report_path = _persist_incident_report(report)
     INCIDENT_LOG.append(report)
 
     total_ms = (time.perf_counter() - t_start) * 1000
@@ -411,6 +565,7 @@ async def receive_event(request: Request):
         "llm_verdict": llm_verdict,
         "top_syscalls": top_syscalls[:5],
         "incident_id": report["incident_id"],
+        "report_path": report_path,
     }
 
 

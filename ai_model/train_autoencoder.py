@@ -32,6 +32,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_MODEL = os.path.join(SCRIPT_DIR, "saved_model.pth")
 OUTPUT_THRESHOLD = os.path.join(SCRIPT_DIR, "threshold.json")
 
+
+def load_csv_combined(csv1: str, csv2: str) -> np.ndarray:
+    """Charge et concatène deux fichiers CSV en un seul dataset."""
+    X1 = load_csv_data(csv1)
+    X2 = load_csv_data(csv2)
+    X = np.concatenate([X1, X2], axis=0)
+    print(f"[Train] Dataset combine : {X1.shape[0]} + {X2.shape[0]} = {X.shape[0]} echantillons")
+    return X
+
 DOMINANT_SYSCALLS = {
     "read": 0, "write": 1, "openat": 250, "close": 3,
     "epoll_wait": 225, "recvfrom": 38, "sendto": 37,
@@ -245,6 +254,38 @@ def train(model, train_loader, val_loader, epochs, device, patience=10):
     return model
 
 
+def compute_rare_dims(X_np: np.ndarray, presence_threshold: float = 0.01) -> dict:
+    """
+    Calcule les dimensions « rares » du corpus nominal.
+
+    Une dimension est rare si elle est non nulle dans moins de
+    `presence_threshold` (1 % par défaut) des fenêtres d'entraînement.
+    Lors de l'inférence, si une telle dimension dépasse `count_threshold`
+    occurrences (5 par défaut), le Tier 2 est sollicité même si la MSE
+    globale reste sous α — adressant la limite de l'attaque furtive.
+
+    Retourne un dict sérialisable JSON contenant :
+      rare_dim_indices   : liste des indices rares
+      rare_dim_freq      : fréquence d'apparition dans le train pour chaque indice
+      count_threshold    : seuil en nombre d'occurrences (valeur absolue pré-normalisation)
+      presence_threshold : paramètre utilisé (fraction de fenêtres)
+    """
+    # Fréquence de présence par dimension (fraction de fenêtres où dim > 0)
+    presence_freq = np.mean(X_np > 1e-9, axis=0)   # shape (INPUT_DIM,)
+    rare_mask = presence_freq < presence_threshold
+    rare_indices = np.where(rare_mask)[0].tolist()
+
+    print(f"[Train] Dimensions rares (< {presence_threshold*100:.0f}% des fenêtres) : "
+          f"{len(rare_indices)}/{INPUT_DIM}")
+
+    return {
+        "rare_dim_indices": rare_indices,
+        "rare_dim_freq": {str(i): float(presence_freq[i]) for i in rare_indices},
+        "count_threshold": 5,          # ≥ 5 occurrences → escalade Tier 2
+        "presence_threshold": presence_threshold,
+    }
+
+
 def compute_thresholds(model, X_np, device):
     model.eval()
     X_tensor = torch.tensor(X_np, dtype=torch.float32).to(device)
@@ -284,17 +325,31 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--csv", type=str, default=None)
+    parser.add_argument("--csv2", type=str, default=None,
+                        help="Second CSV a combiner avec --csv (Option B)")
+    parser.add_argument("--output-model", type=str, default=None,
+                        help="Chemin de sortie du modele (defaut: saved_model.pth)")
+    parser.add_argument("--output-threshold", type=str, default=None,
+                        help="Chemin de sortie des seuils (defaut: threshold.json)")
     args = parser.parse_args()
+
+    output_model = args.output_model if args.output_model else OUTPUT_MODEL
+    output_threshold = args.output_threshold if args.output_threshold else OUTPUT_THRESHOLD
 
     torch.manual_seed(args.seed)
     device = torch.device("cpu")
     print(f"[Train] Device : {device}")
 
-    if args.csv:
+    if args.csv and args.csv2:
+        X = load_csv_combined(args.csv, args.csv2)
+        data_source = f"{args.csv} + {args.csv2}"
+    elif args.csv:
         X = load_csv_data(args.csv)
+        data_source = args.csv
     else:
         print(f"[Train] Generation de {args.samples} echantillons simules...")
         X = generate_normal_traffic(args.samples, seed=args.seed)
+        data_source = "simulated"
 
     print(f"[Train] Shape du dataset : {X.shape}")
     print(f"[Train] Ratio echantillons/features : {X.shape[0] / INPUT_DIM:.1f}x")
@@ -316,10 +371,11 @@ def main():
     model = train(model, train_loader, val_loader, args.epochs, device)
 
     os.makedirs(SCRIPT_DIR, exist_ok=True)
-    torch.save(model.state_dict(), OUTPUT_MODEL)
-    print(f"[Train] Modele enregistre : {OUTPUT_MODEL}")
+    torch.save(model.state_dict(), output_model)
+    print(f"[Train] Modele enregistre : {output_model}")
 
     thresholds = compute_thresholds(model, X, device)
+    rare_dims = compute_rare_dims(X)
 
     threshold_data = {
         "alpha": thresholds["alpha"],
@@ -328,7 +384,7 @@ def main():
         "percentile_alpha": 99.0,
         "percentile_beta": 99.9,
         "train_samples": len(X),
-        "data_source": args.csv if args.csv else "simulated",
+        "data_source": data_source,
         "dropout_rate": args.dropout,
         "mse_stats": {
             "mean": thresholds["mse_mean"],
@@ -337,13 +393,16 @@ def main():
             "max": thresholds["mse_max"],
         },
         "active_dims_mean": thresholds["active_dims_mean"],
+        "rare_dims": rare_dims,
     }
 
-    with open(OUTPUT_THRESHOLD, "w") as f:
+    with open(output_threshold, "w") as f:
         json.dump(threshold_data, f, indent=2)
-    print(f"[Train] Seuils enregistres : {OUTPUT_THRESHOLD}")
+    print(f"[Train] Seuils enregistres : {output_threshold}")
     print(f"  alpha (P99)   = {thresholds['alpha']:.6f}")
     print(f"  beta  (P99.9) = {thresholds['beta']:.6f}")
+    print(f"  rare_dims     = {len(rare_dims['rare_dim_indices'])} dimensions "
+          f"(seuil count >= {rare_dims['count_threshold']})")
 
 
 if __name__ == "__main__":

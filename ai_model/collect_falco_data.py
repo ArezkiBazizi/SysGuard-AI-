@@ -58,12 +58,36 @@ class FalcoCollector:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
         header = [REVERSE_SYSCALL_TABLE.get(i, f"syscall_{i}") for i in range(INPUT_DIM)]
-        with open(output_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
 
-        print(f"[Collector] Fichier de sortie : {output_path}")
-        print(f"[Collector] Fenêtre tumbling : {window_seconds}s")
+        # Mode reprise : si le fichier existe avec le bon header, on ajoute
+        # a la suite sans ecraser les vecteurs deja collectes.
+        # C'est le comportement critique pour survivre aux redemarrages de pod.
+        resumed = False
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            try:
+                with open(output_path, "r", newline="") as f:
+                    existing_header = next(csv.reader(f), None)
+                if existing_header == header:
+                    # Compter les vecteurs deja ecrits (lignes - 1 pour l'entete)
+                    with open(output_path, "r", newline="") as f:
+                        line_count = sum(1 for _ in f)
+                    self._vectors_written = max(0, line_count - 1)
+                    resumed = True
+            except Exception:
+                pass
+
+        if not resumed:
+            # Nouveau fichier : ecrire l'entete
+            with open(output_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+
+        mode = "REPRISE" if resumed else "NOUVEAU"
+        print(f"[Collector] Mode           : {mode}")
+        print(f"[Collector] Fichier        : {output_path}")
+        if resumed:
+            print(f"[Collector] Vecteurs deja collectes : {self._vectors_written}")
+        print(f"[Collector] Fenetre tumbling : {window_seconds}s")
         print(f"[Collector] Dimension du vecteur : {INPUT_DIM}")
 
     def _get_syscall_index(self, syscall_type: Optional[str]) -> int:

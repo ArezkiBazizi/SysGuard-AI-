@@ -1,0 +1,17 @@
+{
+  "alpha": 0.0001734409888740629,
+  "beta": 0.0019243140704929829,
+  "threshold": 0.0001734409888740629,
+  "percentile_alpha": 99.0,
+  "percentile_beta": 99.9,
+  "train_samples": 10000,
+  "data_source": "ai_model/dataset/normal_traffic_20260516T120212Z.csv",
+  "dropout_rate": 0.2,
+  "mse_stats": {
+    "mean": 2.4478373234160244e-05,
+    "median": 1.3807733921566978e-05,
+    "p95": 6.811436469433829e-05,
+    "max": 0.0024448756594210863
+  },
+  "active_dims_mean": 26
+}

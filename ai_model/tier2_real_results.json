@@ -1,0 +1,84 @@
+{
+  "model": "deepseek/deepseek-v4-flash:free",
+  "total": 6,
+  "correct": 0,
+  "accuracy": 0.0,
+  "tp": 0,
+  "tn": 0,
+  "latency_mean_ms": 4780.2,
+  "latency_max_ms": 9562.0,
+  "scenarios": [
+    {
+      "id": "RS-1",
+      "label": "Vraie attaque",
+      "expected": "MENACE",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 9.562
+    },
+    {
+      "id": "CM-1",
+      "label": "Vraie attaque",
+      "expected": "MENACE",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 8.425
+    },
+    {
+      "id": "PE-1",
+      "label": "Vraie attaque",
+      "expected": "MENACE",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 3.135
+    },
+    {
+      "id": "FP-DEP-1",
+      "label": "Faux positif",
+      "expected": "FAUX_POSITIF",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 2.059
+    },
+    {
+      "id": "FP-CRON-1",
+      "label": "Faux positif",
+      "expected": "FAUX_POSITIF",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 4.137
+    },
+    {
+      "id": "FP-INIT-1",
+      "label": "Faux positif",
+      "expected": "FAUX_POSITIF",
+      "verdict": "EMPTY_RESPONSE",
+      "correct": false,
+      "confidence": null,
+      "attack_type": null,
+      "severity_cvss": null,
+      "explanation": null,
+      "latency_s": 1.363
+    }
+  ]
+}
