@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "id": "INC-002",
+    "name": "Crypto-mining",
+    "timestamp": "2026-05-17T01:12:44Z",
+    "pod": "api-worker-5c8b9d-z3m7q",
+    "namespace": "default",
+    "image": "python:3.11-slim",
+    "container_id": "8e2b1f4a7c9d",
+    "mse": 0.0012,
+    "alpha": 0.000173,
+    "beta": 0.00192,
+    "severity": "ANOMALIE",
+    "falco_rule": "SysGuard syscall stream",
+    "falco_output": "Cryptomining pattern detected: clone x5000 threads + sched_yield x8000 burst (xmrig signature) in api-worker pod",
+    "action_taken": "NetworkPolicy deny-all appliquee (quarantaine reseau).",
+    "top_syscalls": [
+      {
+        "syscall": "sched_yield",
+        "count": 8000
+      },
+      {
+        "syscall": "clone",
+        "count": 5000
+      },
+      {
+        "syscall": "futex",
+        "count": 3000
+      },
+      {
+        "syscall": "fork",
+        "count": 2000
+      },
+      {
+        "syscall": "mmap",
+        "count": 400
+      },
+      {
+        "syscall": "read",
+        "count": 350
+      },
+      {
+        "syscall": "write",
+        "count": 300
+      },
+      {
+        "syscall": "brk",
+        "count": 250
+      },
+      {
+        "syscall": "mprotect",
+        "count": 200
+      },
+      {
+        "syscall": "close",
+        "count": 180
+      }
+    ],
+    "expected_verdict": "MENACE"
+  },
+  "model": "deepseek/deepseek-v4-flash:free",
+  "latency_ms": 53452.4,
+  "report": {
+    "verdict": "MENACE",
+    "confidence": 0.95,
+    "attack_type": "Cryptomining",
+    "severity_cvss": "CRITIQUE",
+    "mitre_tactic": "Impact",
+    "mitre_technique": "T1496.001",
+    "summary": "Detection d'un cryptomineur (xmrig) dans le pod api-worker-5c8b9d-z3m7q via un pic de syscalls clone et sched_yield. La quarantaine reseau a ete appliquee automatiquement pour limiter la propagation.",
+    "timeline": [
+      {
+        "t": "T+0s",
+        "event": "SysGuard-AI detecte une anomalie (MSE=0.001200) dans le pod api-worker-5c8b9d-z3m7q. Falco declenche la regle syscall stream avec le motif xmrig: clone(5000) threads et sched_yield(8000) burst."
+      },
+      {
+        "t": "T+0s",
+        "event": "Action automatisee : NetworkPolicy deny-all appliquee sur le pod, isolant le trafic reseau."
+      }
+    ],
+    "iocs": [
+      "Pod: api-worker-5c8b9d-z3m7q (namespace: default)",
+      "Container ID: 8e2b1f4a7c9d",
+      "Image: python:3.11-slim",
+      "Pattern syscall : clone(5000), sched_yield(8000), futex(3000), fork(2000)",
+      "Signature : xmrig (Falco rule matching)"
+    ],
+    "blast_radius": "Le cryptomineur peut epuiser les ressources CPU/memoire du noeud, degrader les services adjacents, et permettre une exfiltration vers des pools de minage si le trafic n'est pas bloque. La quarantaine reseau limite le risque de lateralite mais le pod compromis doit etre neutralise.",
+    "recommended_actions": [
+      "Maintenir la quarantaine reseau (NetworkPolicy deny-all) en vigueur.",
+      "Effectuer une capture forensique du conteneur (filesystem, memoire) pour analyser le binaire xmrig et les artefacts de compromission.",
+      "Identifier le vecteur d'acces initial (logs d'audit K8s, vulnerabilite applicative, image compromise, etc.).",
+      "Reconstruire le pod a partir d'une image fiable et appliquer les correctifs de securite necessaires.",
+      "Verifier les autres pods et noeuds pour des signes de compromission similaire (analyse des syscalls, consommation anormale).",
+      "Supprimer toute persistence (cronjobs, daemonsets suspects) et effectuer une rotation des secrets/cles associes."
+    ],
+    "quarantine_decision": "MAINTENIR",
+    "analyst_note": "Le pattern clone + sched_yield est caracteristique de xmrig. L'alerte est fiable. La quarantaine reseau empeche l'acces aux pools de minage, mais le processus tourne toujours dans le pod. Il est critique d'isoler le noeud et de recolter les donnees forensiques. Le conteneur utilise l'image 'python:3.11-slim', probablement via une vulnerabilite d'execution de code dans l'application API worker."
+  }
+}

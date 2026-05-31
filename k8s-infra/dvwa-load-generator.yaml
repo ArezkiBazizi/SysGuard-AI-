@@ -1,0 +1,115 @@
+# Generateur de trafic HTTP pour DVWA pendant la phase de collecte Falco.
+#
+# OBJECTIF :
+#   Produire un trafic web NORMAL et VARIE sur DVWA pour que Falco
+#   capture des histogrammes BoSC representatifs d'un vrai serveur web.
+#   Sans ce pod, DVWA est en veille (idle) et Falco ne capte que
+#   epoll_wait/futex/nanosleep -> dataset trop homogene.
+#
+# PHASES SIMULEES :
+#   - Navigation GET (index, login, home, about)
+#   - Soumission POST (formulaires DVWA)
+#   - Requetes SQL injection level low (normal pour DVWA lab)
+#   - Telechargement fichiers statiques (CSS/JS)
+#   - Acces API REST simules
+#
+# UTILISATION :
+#   kubectl apply -f k8s-infra/dvwa-load-generator.yaml
+#   kubectl logs -f deployment/dvwa-load-generator
+#
+# ARRETER apres la collecte :
+#   kubectl delete -f k8s-infra/dvwa-load-generator.yaml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dvwa-load-generator
+  namespace: default
+  labels:
+    app: dvwa-load-generator
+    component: training
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dvwa-load-generator
+  template:
+    metadata:
+      labels:
+        app: dvwa-load-generator
+    spec:
+      containers:
+        - name: load-gen
+          # wget/curl disponibles dans busybox ; sh pour la boucle
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              DVWA="http://dvwa.default.svc.cluster.local"
+              echo "[LoadGen] Demarrage - cible : $DVWA"
+
+              # Attendre que DVWA soit accessible
+              until wget -q -O /dev/null "$DVWA/login.php" 2>/dev/null; do
+                echo "[LoadGen] En attente de DVWA..."
+                sleep 5
+              done
+              echo "[LoadGen] DVWA accessible - debut de la generation de trafic"
+
+              ITER=0
+              while true; do
+                ITER=$((ITER + 1))
+
+                # --- Phase GET : navigation standard ---
+                wget -q -O /dev/null "$DVWA/login.php"             2>/dev/null
+                wget -q -O /dev/null "$DVWA/index.php"             2>/dev/null
+                wget -q -O /dev/null "$DVWA/"                      2>/dev/null
+                wget -q -O /dev/null "$DVWA/about.php"             2>/dev/null
+                wget -q -O /dev/null "$DVWA/security.php"          2>/dev/null
+
+                # --- Fichiers statiques (CSS/JS/images) ---
+                wget -q -O /dev/null "$DVWA/dvwa/css/main.css"     2>/dev/null
+                wget -q -O /dev/null "$DVWA/dvwa/js/dvwaPage.js"   2>/dev/null
+
+                # --- Phase SQL Injection (level: low — requetes GET SQL) ---
+                wget -q -O /dev/null "$DVWA/vulnerabilities/sqli/?id=1&Submit=Submit"   2>/dev/null
+                wget -q -O /dev/null "$DVWA/vulnerabilities/sqli/?id=2&Submit=Submit"   2>/dev/null
+                wget -q -O /dev/null "$DVWA/vulnerabilities/sqli/?id=3&Submit=Submit"   2>/dev/null
+
+                # --- Brute force page (genere des requetes POST) ---
+                wget -q -O /dev/null \
+                  --post-data="username=admin&password=password&Login=Login" \
+                  "$DVWA/vulnerabilities/brute/" 2>/dev/null
+
+                # --- Command injection (requetes normales de lab) ---
+                wget -q -O /dev/null \
+                  "$DVWA/vulnerabilities/exec/?ip=127.0.0.1&Submit=Submit" \
+                  2>/dev/null
+
+                # --- XSS reflected (GET) ---
+                wget -q -O /dev/null \
+                  "$DVWA/vulnerabilities/xss_r/?name=test" \
+                  2>/dev/null
+
+                # --- CSRF page ---
+                wget -q -O /dev/null \
+                  "$DVWA/vulnerabilities/csrf/" \
+                  2>/dev/null
+
+                # Pause variable pour simuler un utilisateur reel (0.5-3s)
+                # busybox sleep supporte les decimales sur certaines images
+                sleep 1
+
+                # Toutes les 20 iterations : log de progression
+                if [ $((ITER % 20)) -eq 0 ]; then
+                  echo "[LoadGen] $ITER iterations de trafic completees"
+                fi
+              done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi

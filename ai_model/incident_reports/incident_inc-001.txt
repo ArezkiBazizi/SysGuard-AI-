@@ -1,0 +1,87 @@
+====================================================================
+  RAPPORT D'INCIDENT SYSGUARD-AI  —  INC-001
+  REVERSE SHELL
+====================================================================
+  Horodatage    : 2026-05-17T01:12:04Z
+  Pod           : web-frontend-7d9f8b-x4k2p (production)
+  Image         : nginx:1.25-alpine
+  Genere par    : LLM deepseek/deepseek-v4-flash:free via OpenRouter
+  Latence LLM   : 32609 ms
+--------------------------------------------------------------------
+
+  VERDICT        : MENACE
+  CONFIANCE      : 0.95
+  TYPE D'ATTAQUE : Reverse Shell
+  SEVERITE       : CRITIQUE
+  MITRE TACTIC   : Execution
+  MITRE TECHNIQUE: T1059.004
+  QUARANTAINE    : MAINTENIR
+
+--------------------------------------------------------------------
+  RESUME EXECUTIF
+--------------------------------------------------------------------
+  Anomalous process activity detected in nginx container web-
+  frontend-7d9f8b-x4k2p: /bin/bash with high rates of execve,
+  connect, and dup2 syscalls indicates a reverse shell connecting
+  to external IP 192.168.1.100:4444. Immediate network quarantine
+  applied via NetworkPolicy deny-all.
+
+--------------------------------------------------------------------
+  CHRONOLOGIE DE L'INCIDENT
+--------------------------------------------------------------------
+    T-5s  Attacker executes /bin/bash inside nginx container via exploit or misconfiguration.
+    T-2s  Bash process initiates connect() to 192.168.1.100:4444 and dup2() for standard I/O redirection.
+    T+0s  SysGuard-AI Tier 1 detects anomalous syscall pattern (execve:1800, connect:1100, dup2:700) and triggers alert. Falco rule matches reverse shell behavior.
+    T+1s  Automated response applies NetworkPolicy deny-all to quarantine the pod, blocking all egress traffic.
+
+--------------------------------------------------------------------
+  INDICATEURS DE COMPROMISSION (IOC)
+--------------------------------------------------------------------
+  [!] 192.168.1.100:4444
+  [!] process /bin/bash inside container 3f7a9c2e1b4d
+  [!] container image nginx:1.25-alpine
+  [!] pod web-frontend-7d9f8b-x4k2p in namespace production
+  [!] high frequency of syscalls: execve, connect, dup2
+
+--------------------------------------------------------------------
+  PERIMETRE D'IMPACT (BLAST RADIUS)
+--------------------------------------------------------------------
+  If not contained, the attacker could establish a persistent
+  command-and-control channel, laterally move to other containers
+  and services in the production namespace, access sensitive data,
+  or escalate to full cluster compromise. The internal IP
+  (192.168.1.100) suggests potential pivot point within the
+  internal network.
+
+--------------------------------------------------------------------
+  ACTIONS RECOMMANDEES
+--------------------------------------------------------------------
+  1. Initiate full forensic acquisition of the container image
+     and runtime artifacts (memory dump, disk, logs).
+  2. Scan the entire cluster for similar syscall patterns or
+     suspicious processes (e.g., /bin/bash spawned by nginx).
+  3. Review and harden network policies: ensure least-privilege
+     egress rules, restrict pods from initiating outbound
+     connections to unknown IPs.
+  4. Investigate the origin of the attack: check application
+     vulnerabilities, compromised credentials, or
+     misconfigurations that allowed code execution.
+  5. Rotate all secrets, API tokens, and service account
+     credentials that the pod might have accessed.
+  6. Consider upgrading the base image to a minimal, hardened
+     version (e.g., nginx:alpine-slim) and remove unnecessary
+     binaries like bash.
+
+--------------------------------------------------------------------
+  NOTE ANALYSTE SOC
+--------------------------------------------------------------------
+  The syscall pattern is classic reverse shell behavior
+  (execve->connect->dup2). The MSE score of 0.000520 falls between
+  alpha and beta, confirming anomaly. The internal IP
+  192.168.1.100 on port 4444 is suspicious; check if this IP is
+  known in the enterprise environment or if it belongs to an
+  attacker-controlled system. Immediate containment is justified.
+  Consider extending network quarantine to adjacent pods if
+  lateral movement is suspected.
+
+====================================================================

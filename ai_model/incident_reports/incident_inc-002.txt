@@ -1,0 +1,81 @@
+====================================================================
+  RAPPORT D'INCIDENT SYSGUARD-AI  —  INC-002
+  CRYPTO-MINING
+====================================================================
+  Horodatage    : 2026-05-17T01:12:44Z
+  Pod           : api-worker-5c8b9d-z3m7q (default)
+  Image         : python:3.11-slim
+  Genere par    : LLM deepseek/deepseek-v4-flash:free via OpenRouter
+  Latence LLM   : 53452 ms
+--------------------------------------------------------------------
+
+  VERDICT        : MENACE
+  CONFIANCE      : 0.95
+  TYPE D'ATTAQUE : Cryptomining
+  SEVERITE       : CRITIQUE
+  MITRE TACTIC   : Impact
+  MITRE TECHNIQUE: T1496.001
+  QUARANTAINE    : MAINTENIR
+
+--------------------------------------------------------------------
+  RESUME EXECUTIF
+--------------------------------------------------------------------
+  Detection d'un cryptomineur (xmrig) dans le pod api-
+  worker-5c8b9d-z3m7q via un pic de syscalls clone et sched_yield.
+  La quarantaine reseau a ete appliquee automatiquement pour
+  limiter la propagation.
+
+--------------------------------------------------------------------
+  CHRONOLOGIE DE L'INCIDENT
+--------------------------------------------------------------------
+    T+0s  SysGuard-AI detecte une anomalie (MSE=0.001200) dans le pod api-worker-5c8b9d-z3m7q. Falco declenche la regle syscall stream avec le motif xmrig: clone(5000) threads et sched_yield(8000) burst.
+    T+0s  Action automatisee : NetworkPolicy deny-all appliquee sur le pod, isolant le trafic reseau.
+
+--------------------------------------------------------------------
+  INDICATEURS DE COMPROMISSION (IOC)
+--------------------------------------------------------------------
+  [!] Pod: api-worker-5c8b9d-z3m7q (namespace: default)
+  [!] Container ID: 8e2b1f4a7c9d
+  [!] Image: python:3.11-slim
+  [!] Pattern syscall : clone(5000), sched_yield(8000), futex(3000), fork(2000)
+  [!] Signature : xmrig (Falco rule matching)
+
+--------------------------------------------------------------------
+  PERIMETRE D'IMPACT (BLAST RADIUS)
+--------------------------------------------------------------------
+  Le cryptomineur peut epuiser les ressources CPU/memoire du
+  noeud, degrader les services adjacents, et permettre une
+  exfiltration vers des pools de minage si le trafic n'est pas
+  bloque. La quarantaine reseau limite le risque de lateralite
+  mais le pod compromis doit etre neutralise.
+
+--------------------------------------------------------------------
+  ACTIONS RECOMMANDEES
+--------------------------------------------------------------------
+  1. Maintenir la quarantaine reseau (NetworkPolicy deny-all) en
+     vigueur.
+  2. Effectuer une capture forensique du conteneur (filesystem,
+     memoire) pour analyser le binaire xmrig et les artefacts de
+     compromission.
+  3. Identifier le vecteur d'acces initial (logs d'audit K8s,
+     vulnerabilite applicative, image compromise, etc.).
+  4. Reconstruire le pod a partir d'une image fiable et appliquer
+     les correctifs de securite necessaires.
+  5. Verifier les autres pods et noeuds pour des signes de
+     compromission similaire (analyse des syscalls, consommation
+     anormale).
+  6. Supprimer toute persistence (cronjobs, daemonsets suspects)
+     et effectuer une rotation des secrets/cles associes.
+
+--------------------------------------------------------------------
+  NOTE ANALYSTE SOC
+--------------------------------------------------------------------
+  Le pattern clone + sched_yield est caracteristique de xmrig.
+  L'alerte est fiable. La quarantaine reseau empeche l'acces aux
+  pools de minage, mais le processus tourne toujours dans le pod.
+  Il est critique d'isoler le noeud et de recolter les donnees
+  forensiques. Le conteneur utilise l'image 'python:3.11-slim',
+  probablement via une vulnerabilite d'execution de code dans
+  l'application API worker.
+
+====================================================================
