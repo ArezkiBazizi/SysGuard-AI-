@@ -29,6 +29,8 @@ spec:
               value: "/app/ai_model/saved_model.pth"
             - name: THRESHOLD_PATH
               value: "/app/ai_model/threshold.json"
+            - name: INCIDENT_REPORTS_DIR
+              value: "/app/ai_model/incident_reports"
             - name: K8S_NAMESPACE
               value: "default"
             # true = pas de NetworkPolicy reelle (recommande pour premier test DVWA)
@@ -64,6 +66,12 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
+          volumeMounts:
+            - name: incident-reports
+              mountPath: /app/ai_model/incident_reports
+      volumes:
+        - name: incident-reports
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
